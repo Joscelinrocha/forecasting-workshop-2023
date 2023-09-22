@@ -4,6 +4,7 @@ library(fpp3)
 
 download.file("http://robjhyndman.com/data/tourism.xlsx",
               tourism_file <- tempfile())
+
 my_tourism <- readxl::read_excel(tourism_file) |>
   mutate(Quarter = yearquarter(Quarter)) |>
   as_tsibble(
@@ -28,6 +29,14 @@ state_tourism <- my_tourism |>
 aus_production |> autoplot(Bricks)
 
 pelt |> autoplot(Lynx)
+
+pelt |> pivot_longer(Lynx:Hare) |> autoplot(value)
+
+pelt |> autoplot(Lynx) +
+  autolayer(object = pelt, Hare, col="red")
+
+
+pelt |> autoplot(vars(Lynx,Hare))
 
 gafa_stock |> autoplot(Close)
 
@@ -61,13 +70,16 @@ snowy |> gg_subseries(Trips)
 
 # Produce a calendar plot for the `pedestrian` data from one location and one year.
 library(sugrrants)
-(tsibble::pedestrian |>
+(pedestrian |>
   filter(year(Date) == 2016, Sensor == "Southern Cross Station") |>
   frame_calendar(x = Time, y = Count, date = Date) |>
   ggplot(aes(x = .Time, y = .Count, group = Date)) +
   geom_line()) |>
   prettify()
-
+ 
+pedestrian <- pedestrian |>
+  filter(year(Date) == 2016, Sensor == "Southern Cross Station") |>
+  frame_calendar(x = Time, y = Count, date = Date)
 
 # Lab Session 4
 
@@ -99,6 +111,8 @@ dgoog <- gafa_stock |>
   filter(Symbol == "GOOG", year(Date) >= 2018) |>
   mutate(diff = difference(Close))
 dgoog |> autoplot(diff)
+
+
 dgoog |>
   ACF(diff) |>
   autoplot()
@@ -108,12 +122,14 @@ gafa_stock |>
   ACF(diff) |> autoplot()
 
 
-
-
-
-
-
 # Lab Session 6
+
+global_economy %>%
+  filter(Country == "Bolivia") %>%
+  autoplot(GDP / Population, alpha = 0.3) +
+  guides(colour = "none")
+
+
 
 global_economy |>
   autoplot(GDP / Population, alpha = 0.3) +
@@ -139,7 +155,7 @@ max_gdp_pc <- global_economy |>
   )
 
 # install.packages("ggrepel")
-# Using goem_label_repel() gives nicer label positions than geom_label()
+# Using geom_label_repel() gives nicer label positions than geom_label()
 # If the ggrepel package is not available, you can use geom_label() instead
 library(ggrepel)
 global_economy |>
@@ -182,10 +198,10 @@ aus_production |>
 
 canadian_gas |> autoplot()
 
-
-
-
-
+# 2. Why is a Box-Cox transformation unhelpful for the canadian_gas data?
+canadian_gas |>
+  autoplot(box_cox(Volume, 0.1))
+#### 
 
 # Lab Session 8
 
@@ -236,6 +252,7 @@ tourism |>
 
 library(broom)
 
+## Cost
 ## Compute features
 PBS_feat <- PBS |>
   features(Cost, feature_set(pkgs = "feasts")) |>
@@ -263,9 +280,41 @@ PBS |>
   semi_join(outliers, by = c("Concession", "Type", "ATC1", "ATC2")) |>
   autoplot(Cost) +
   facet_grid(vars(Concession, Type, ATC1, ATC2),
-             scales = "free_y") +
-  labs(title = "Outlying time series in PC space")
+             scales = "free_y",  switch = "y") +
+  labs(title = "Outlying time series in PC space") +
+  theme(strip.text.y.left = element_text(angle = 0))
 
+## Scripts
+## Compute features
+PBS_feat <- PBS |>
+  features(Scripts, feature_set(pkgs = "feasts")) |>
+  select(-`...26`) |>
+  na.omit()
+
+## Compute principal components
+PBS_prcomp <- PBS_feat |>
+  select(-Concession, -Type, -ATC1, -ATC2) |>
+  prcomp(scale = TRUE) |>
+  augment(PBS_feat)
+
+## Plot the first two components
+PBS_prcomp |>
+  ggplot(aes(x = .fittedPC1, y = .fittedPC2)) +
+  geom_point()
+
+## Pull out most unusual series from first principal component
+outliers <- PBS_prcomp |>
+  filter(.fittedPC1 > 7)
+outliers
+
+## Visualise the unusual series
+PBS |>
+  semi_join(outliers, by = c("Concession", "Type", "ATC1", "ATC2")) |>
+  autoplot(Scripts) +
+  facet_grid(vars(Concession, Type, ATC1, ATC2),
+             scales = "free_y",  switch = "y") +
+  labs(title = "Outlying time series in PC space") +
+  theme(strip.text.y.left = element_text(angle = 0))
 
 
 # Lab Session 11
@@ -395,8 +444,11 @@ gas <- aus_production |>
 autoplot(gas)
 
 fit <- gas |>
+  filter(year(Quarter) <=2005) |>
   model(
     auto = ETS(Gas),
+    MAM = ETS(Gas ~ error("M") + trend("A") + season("M")),
+    additive = ETS(Gas ~season("A")),
     damped = ETS(Gas ~ trend("Ad")),
     log = ETS(log(Gas)),
     snaive = SNAIVE(Gas)
@@ -426,6 +478,7 @@ fc |>
 
 us_gdp <- global_economy |>
   filter(Code == "USA")
+
 us_gdp |> autoplot(log(GDP))
 
 us_gdp_model <- us_gdp |>
@@ -434,7 +487,9 @@ us_gdp_model <- us_gdp |>
     arima = ARIMA(log(GDP)),
     arima1 = ARIMA(log(GDP) ~ pdq(d = 1)),
   )
+
 us_gdp_model
+
 glance(us_gdp_model)
 
 us_gdp_model |>
@@ -485,6 +540,7 @@ elec_model <- vic_elec_daily |>
   model(fit = ARIMA(Demand ~ Temperature +
     I(pmax(Temperature - 23.5, 0)) +
     (Day_Type == "Weekday")))
+
 report(elec_model)
 
 elec_model |> gg_tsresiduals()
@@ -530,7 +586,7 @@ vic_elec_daily <- vic_elec |>
 elec_model <- vic_elec_daily |>
   model(fit = ARIMA(Demand ~
     fourier("year", K = 10) + PDQ(0, 0, 0) +
-    Temperature + I(pmax(Temperature - 23, 0)) +
+    Temperature + I(pmax(Temperature - 23.5, 0)) +
     (Day_Type == "Weekday")))
 report(elec_model)
 
@@ -566,6 +622,7 @@ PBS_aggregated <- PBS |>
     Concession * Type * ATC1,
     Cost = sum(Cost) / 1e6
   )
+
 fit <- PBS_aggregated |>
   filter(Month <= yearmonth("2005 Jun")) |>
   model(
@@ -573,13 +630,18 @@ fit <- PBS_aggregated |>
     arima = ARIMA(Cost),
     snaive = SNAIVE(Cost)
   )
+
 fc <- fit |>
   reconcile(
     ets_adj = min_trace(ets),
     arima_adj = min_trace(arima),
-    snaive_adj = min_trace(snaive)
-  ) |>
+    snaive_adj = min_trace(snaive)) |>
   forecast(h = "3 years")
+
+fc |>
+  filter(is_aggregated(Concession) & is_aggregated(Type) & is_aggregated(ATC1)) |>
+  autoplot(PBS_aggregated, level = 95)
+
 accuracy(fc, PBS_aggregated) |>
   group_by(.model) |>
   summarise(MASE = mean(MASE)) |>
